@@ -47,8 +47,19 @@ AIC 校赛·智能文化赛道作品。7 步工作台：输入需求 → AI 文�
 - 修复模型库列表接口 `list` 过滤条件（`prefix` 匹配不到实际 key），改为遍历后按 `endsWith(".meta")` 过滤。
 - 全量 `node --check` 校验通过：`config.js`、`proxy/submit3d/check3d/modelStore/getmodel`、前端内联 JS。
 
-> ⚠️ 重新部署时必须**完整替换旧的函数文件**（尤其 `netlify/functions/*.mjs`），并到 Netlify → Deploys → **Trigger deploy 强制重新部署**，确认 Deploys 里最新一次成功。若线上仍报错，大概率是旧函数未被替换。
-> 之前若出现过 `Unexpected token 'o', "[object Response]"`，那通常是**旧版本函数/旧本地代理返回的内容**；换成标准 `Response` 的正确函数并强制重新部署后即消失。
+> ⚠️ 重新部署时必须**完整替换旧的函数文件**（尤其 `netlify/functions/*.mjs`），并到 Netlify → Deploys → **Trigger deploy（Clear cache and deploy site）强制重新部署**，确认 Deploys 里最新一次成功。若线上仍报错，大概率是旧函数未被替换。
+
+## 当前排查状态（临时探针 v8）
+
+`netlify/functions/proxy.mjs` 当前是**强化探针版 v8-probe**：它**绝不崩溃**，
+无论前端发来什么请求体，都直接回显：
+- 服务器是否拿到 `DASHSCOPE_API_KEY`（`server.hasKey` / `server.keyTail`）
+- 收到的请求体原文前 300 字符（`received.bodyPreview`）、长度、是否为字符串
+- 请求头（Content-Type / User-Agent）、HTTP 方法
+
+**目的**：线上若仍报 `proxy.mjs:25:32 ... JSON.parse ... [object Response]`，说明**线上跑的仍是旧版函数**（不是本探针版——本版连 parse 都不做，根本不会在第 25 行崩溃）。
+部署后浏览器访问 `/.netlify/functions/proxy` 或在前端点③步骤，应看到返回 `hello:true, probeVersion:"v8-probe"` 的 JSON；
+把该 JSON 原文贴给助手即可一锤定音。排查完成后，再把 proxy.mjs 替换回正式版（千问/万相代理逻辑）。
 
 ## 目录结构
 
