@@ -5,7 +5,7 @@
 //  排查完成后替换回正式版。
 // ============================================================
 
-export default async function handler(event) {
+export async function handler(event, context) {
   if (event.httpMethod === "OPTIONS") {
     return new Response("ok", { status: 200, headers: cors() });
   }
@@ -13,6 +13,10 @@ export default async function handler(event) {
   const key = process.env.DASHSCOPE_API_KEY;
   const hdrs = event.headers || {};
   const eventKeys = Object.keys(event || {});
+
+  // 额外回显：context 顶层键，辅助判断运行时
+  const contextKeys = (context && typeof context === "object") ? Object.keys(context) : [];
+  const contextJson = (() => { try { return JSON.stringify(context); } catch (e) { return "stringify-error:" + String(e); } })();
   const ownKeys = (typeof Reflect !== "undefined" && typeof Reflect.ownKeys === "function")
     ? (event ? Reflect.ownKeys(event).map(String) : []) : [];
   let eventFullJson = null;
@@ -51,7 +55,7 @@ export default async function handler(event) {
 
   return new Response(JSON.stringify({
     hello: true,
-    probeVersion: "v8.3-probe",
+    probeVersion: "v8.4-probe",
     server: {
       node: (typeof process !== "undefined" && process.version) ? process.version : "unknown",
       hasKey: !!key,
@@ -63,12 +67,14 @@ export default async function handler(event) {
       eventTopLevelKeys: eventKeys,
       eventOwnKeys: ownKeys,
       eventFullJson,
+      contextTopLevelKeys: contextKeys,
+      contextJson,
       allHeaders: hdrs,
       headerKeys: Object.keys(hdrs),
       body: bodyInfo,
       rawInfo,
     },
-    hint: "v8.3 终极探针。把这整段 JSON 原样贴给助手。重点看 eventFullJson / eventOwnKeys / allHeaders / body。",
+    hint: "v8.4 终极探针（命名导出版）。把这整段 JSON 原样贴给助手。重点看 eventFullJson / contextTopLevelKeys / body。",
   }), { status: 200, headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" } });
 }
 
