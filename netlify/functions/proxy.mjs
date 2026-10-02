@@ -1,83 +1,87 @@
 // ============================================================
-//  proxy.mjs —— 通义千问 + 通义万相 代理（POST + JSON body）
-//  ⚠️ 当前为【终极探针版 v8.2-probe】：绝不崩溃，把 event 对象
-//     的所有字段 + 全部请求头 + body 真实类型/内容 全量回显。
-//  排查完成后替换回正式版。
+//  proxy.mjs —— 终极探针 v8.5（命名导出 + LAMBDA 返回格式）
+//  目标：确认当前 Netlify 运行时究竟期望哪种 handler 返回格式。
+//    - v8.3 export default + Web Response → 能回 hello:true 但 event 空壳
+//    - v8.4 命名导出 + Web Response      → 502 "invalid status code from lambda: 0"
+//  本版 v8.5：命名导出 + 返回 {statusCode, headers, body}(Lambda 格式)，
+//  并完整回显 event / context，验证运行时吃不吃 Lambda 格式。
 // ============================================================
 
+function cors() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Content-Type": "application/json; charset=utf-8",
+  };
+}
+
+function safeStr(v) {
+  try { return JSON.stringify(v); } catch (e) { return "stringify-error:" + String(e); }
+}
+
+function describeBody(v) {
+  if (typeof v === "string") {
+    let preview = v.slice(0, 600);
+    let parsed = null, parseFailed = false;
+    try { parsed = JSON.parse(v); } catch (e) { parseFailed = true; }
+    return { found: true, kind: "string", length: v.length, preview, parsed, parseFailed };
+  }
+  if (v === undefined || v === null) return { found: false, kind: String(v), value: v };
+  if (Buffer && Buffer.isBuffer(v)) {
+    const s = v.toString("utf8");
+    return { found: true, kind: "Buffer", byteLength: v.length, preview: s.slice(0, 600) };
+  }
+  if (v instanceof Uint8Array) {
+    let s; try { s = new TextDecoder().decode(v); } catch (e) { s = String(v); }
+    return { found: true, kind: "Uint8Array", byteLength: v.length, preview: s.slice(0, 600) };
+  }
+  return { found: true, kind: typeof v, preview: safeStr(v).slice(0, 600) };
+}
+
 export async function handler(event, context) {
-  if (event.httpMethod === "OPTIONS") {
-    return new Response("ok", { status: 200, headers: cors() });
-  }
-
-  const key = process.env.DASHSCOPE_API_KEY;
-  const hdrs = event.headers || {};
-  const eventKeys = Object.keys(event || {});
-
-  // 额外回显：context 顶层键，辅助判断运行时
+  const key = process.env.DASHSCOPE_API_KEY || "";
+  const bodyInfo = describeBody(event && event.body);
+  const ownKeys = (event && typeof Reflect !== "undefined" && Reflect.ownKeys)
+    ? Reflect.ownKeys(event).map(String) : [];
   const contextKeys = (context && typeof context === "object") ? Object.keys(context) : [];
-  const contextJson = (() => { try { return JSON.stringify(context); } catch (e) { return "stringify-error:" + String(e); } })();
-  const ownKeys = (typeof Reflect !== "undefined" && typeof Reflect.ownKeys === "function")
-    ? (event ? Reflect.ownKeys(event).map(String) : []) : [];
-  let eventFullJson = null;
-  try { eventFullJson = JSON.stringify(event); } catch (e) { eventFullJson = "stringify-error:" + String(e); }
+  let eventJson = null, contextJson = null;
+  try { eventJson = JSON.stringify(event); } catch (e) { eventJson = "stringify-error:" + String(e); }
+  try { contextJson = JSON.stringify(context); } catch (e) { contextJson = "stringify-error:" + String(e); }
 
-  // —— body 探测：兼容 字符串 / Buffer / TypedArray / 对象 / 空 ——
-  function describeBody(b) {
-    if (b === null || b === undefined) return { found: false, note: "event.body 是 null/undefined" };
-    if (typeof b === "string") return { found: true, type: "string", length: b.length, preview: b.slice(0, 600) };
-    if (Buffer.isBuffer && Buffer.isBuffer(b)) {
-      const s = b.toString("utf8");
-      return { found: true, type: "Buffer", length: s.length, preview: s.slice(0, 600), hexHead: b.slice(0, 40).toString("hex") };
-    }
-    if (ArrayBuffer.isView && ArrayBuffer.isView(b)) {
-      const s = Buffer.from(b).toString("utf8");
-      return { found: true, type: "TypedArray(" + b.constructor.name + ")", length: s.length, preview: s.slice(0, 600) };
-    }
-    try {
-      const s = JSON.stringify(b);
-      return { found: true, type: "object", length: (s || "").length, preview: (s || "").slice(0, 600) };
-    } catch (e) {
-      return { found: true, type: "object(unserializable)", note: String(e) };
-    }
-  }
-  const bodyInfo = describeBody(event.body);
-
-  // rawBody / isBase64Encoded 顺带看一下
-  const rawInfo = (() => {
-    if (event.rawBody === undefined && event.isBase64Encoded === undefined) return null;
-    return {
-      hasRawBody: event.rawBody !== undefined,
-      rawBodyIsString: typeof event.rawBody === "string",
-      isBase64Encoded: event.isBase64Encoded,
-    };
-  })();
-
-  return new Response(JSON.stringify({
+  const data = {
     hello: true,
-    probeVersion: "v8.4-probe",
+    probeVersion: "v8.5-probe",
     server: {
-      node: (typeof process !== "undefined" && process.version) ? process.version : "unknown",
+      node: process.version,
       hasKey: !!key,
-      keyTail: key ? String(key).slice(-4) : "",
+      keyTail: key ? key.slice(-4) : null,
       hasResponseGlobal: typeof Response !== "undefined",
     },
     received: {
-      method: event.httpMethod,
-      eventTopLevelKeys: eventKeys,
+      httpMethod: event ? event.httpMethod : undefined,
+      eventTopLevelKeys: event ? Object.keys(event) : [],
       eventOwnKeys: ownKeys,
-      eventFullJson,
+      eventJson,
       contextTopLevelKeys: contextKeys,
       contextJson,
-      allHeaders: hdrs,
-      headerKeys: Object.keys(hdrs),
+      allHeaders: (event && event.headers) || {},
+      headerKeys: event ? Object.keys(event.headers || {}) : [],
       body: bodyInfo,
-      rawInfo,
     },
-    hint: "v8.4 终极探针（命名导出版）。把这整段 JSON 原样贴给助手。重点看 eventFullJson / contextTopLevelKeys / body。",
-  }), { status: 200, headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" } });
-}
+    format: "v8.5 lambda-object-response",
+    hint: "本版返回 Lambda 格式 {statusCode,headers,body}。若 Netlify 报 unsupported value 则运行时吃 Web Response；若正常则吃 Lambda 格式。请把本 JSON 原样贴给助手。",
+  };
 
-function cors() {
-  return { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type, Authorization", "Access-Control-Allow-Methods": "GET, POST, OPTIONS" };
+  const body = JSON.stringify(data);
+  return {
+    statusCode: 200,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    },
+    body,
+  };
 }
