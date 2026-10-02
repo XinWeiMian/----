@@ -11,6 +11,10 @@ export default async function handler(event) {
   const key = process.env.DASHSCOPE_API_KEY;
   const hdrs = event.headers || {};
   const eventKeys = Object.keys(event || {});
+  const ownKeys = (typeof Reflect !== "undefined" && typeof Reflect.ownKeys === "function")
+    ? (event ? Reflect.ownKeys(event).map(String) : []) : [];
+  let eventFullJson = null;
+  try { eventFullJson = JSON.stringify(event); } catch (e) { eventFullJson = "stringify-error:" + String(e); }
 
   function describeBody(b) {
     if (b === null || b === undefined) return { found: false, note: "event.body 是 null/undefined" };
@@ -34,7 +38,7 @@ export default async function handler(event) {
 
   return new Response(JSON.stringify({
     hello: true,
-    submitProbeVersion: "v8.2-submit-probe",
+    submitProbeVersion: "v8.3-submit-probe",
     server: {
       node: (typeof process !== "undefined" && process.version) ? process.version : "unknown",
       hasKey: !!key,
@@ -44,11 +48,13 @@ export default async function handler(event) {
     received: {
       method: event.httpMethod,
       eventTopLevelKeys: eventKeys,
+      eventOwnKeys: ownKeys,
+      eventFullJson,
       allHeaders: hdrs,
       headerKeys: Object.keys(hdrs),
       body: bodyInfo,
     },
-    hint: "v8.2 终极探针。把这整段 JSON 原样贴给助手。",
+    hint: "v8.3 终极探针。把这整段 JSON 原样贴给助手。重点看 eventFullJson / eventOwnKeys / allHeaders / body。",
   }), { status: 200, headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" } });
 }
 
