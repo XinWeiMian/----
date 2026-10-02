@@ -12,18 +12,22 @@ const WANX_TASK = (id) => `https://dashscope.aliyuncs.com/api/v1/tasks/${id}`;
 
 export default async function handler(event) {
   if (event.httpMethod === "OPTIONS") return new Response("ok", { status: 200, headers: cors() });
+  // ===== 探针模式（临时诊断）：只回显服务器状态，不真正调 AI =====
   const key = process.env.DASHSCOPE_API_KEY;
-  if (!key) return json(500, { error: "缺少 DASHSCOPE_API_KEY" });
-  try {
-    const body = event.body ? JSON.parse(event.body) : {};
-    const kind = body.kind || "qwen";
-    if (kind === "wanx") {
-      return await runWanx(key, body);
-    }
-    return await runQwen(key, body);
-  } catch (e) {
-    return json(500, { error: String(e) });
-  }
+  return new Response(JSON.stringify({
+    hello: true,
+    probeVersion: "v7-probe",
+    server: {
+      node: typeof process !== "undefined" && process.version ? process.version : "unknown",
+      hasKey: !!key,
+      keyTail: key ? key.slice(-4) : "",
+      hasResponseGlobal: typeof Response !== "undefined",
+    },
+    received: {
+      method: event.httpMethod,
+      kind: (event.body ? JSON.parse(event.body).kind : undefined) || null,
+    },
+  }), { status: 200, headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" } });
 }
 
 /* ---------- 千问 ---------- */
