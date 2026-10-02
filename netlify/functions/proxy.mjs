@@ -1,8 +1,8 @@
 // ============================================================
 //  proxy.mjs —— 通义千问 + 通义万相 代理（POST + JSON body）
-//  ⚠️ 当前为【强化探针版 v8-probe】：无论入参是什么都不会崩溃，
-//     直接回显服务器收到的原始请求体，用于一锤定音排查线上版本/入参问题。
-//  排查完成后需替换回正式版（v6 正式逻辑 + new Response + messages 字段）。
+//  ⚠️ 当前为【终极探针版 v8.2-probe】：绝不崩溃，把 event 对象
+//     的所有字段 + 全部请求头 + body 真实类型/内容 全量回显。
+//  排查完成后替换回正式版。
 // ============================================================
 
 export default async function handler(event) {
@@ -11,18 +11,43 @@ export default async function handler(event) {
   }
 
   const key = process.env.DASHSCOPE_API_KEY;
+  const hdrs = event.headers || {};
+  const eventKeys = Object.keys(event || {});
 
-  // —— 读取原始请求体（绝不 parse 崩溃）——
-  let bodyText = typeof event.body === "string" ? event.body : JSON.stringify(event.body || {});
-  // 若 body 是 "[object ...]" 这类被字符串化的对象，原样保留，便于看清
-  let parsed = null;
-  let parseFailed = false;
-  try { parsed = JSON.parse(bodyText); } catch (e) { parseFailed = true; }
+  // —— body 探测：兼容 字符串 / Buffer / TypedArray / 对象 / 空 ——
+  function describeBody(b) {
+    if (b === null || b === undefined) return { found: false, note: "event.body 是 null/undefined" };
+    if (typeof b === "string") return { found: true, type: "string", length: b.length, preview: b.slice(0, 600) };
+    if (Buffer.isBuffer && Buffer.isBuffer(b)) {
+      const s = b.toString("utf8");
+      return { found: true, type: "Buffer", length: s.length, preview: s.slice(0, 600), hexHead: b.slice(0, 40).toString("hex") };
+    }
+    if (ArrayBuffer.isView && ArrayBuffer.isView(b)) {
+      const s = Buffer.from(b).toString("utf8");
+      return { found: true, type: "TypedArray(" + b.constructor.name + ")", length: s.length, preview: s.slice(0, 600) };
+    }
+    try {
+      const s = JSON.stringify(b);
+      return { found: true, type: "object", length: (s || "").length, preview: (s || "").slice(0, 600) };
+    } catch (e) {
+      return { found: true, type: "object(unserializable)", note: String(e) };
+    }
+  }
+  const bodyInfo = describeBody(event.body);
 
-  // 服务端所见（探针回显，绝不抛错）
+  // rawBody / isBase64Encoded 顺带看一下
+  const rawInfo = (() => {
+    if (event.rawBody === undefined && event.isBase64Encoded === undefined) return null;
+    return {
+      hasRawBody: event.rawBody !== undefined,
+      rawBodyIsString: typeof event.rawBody === "string",
+      isBase64Encoded: event.isBase64Encoded,
+    };
+  })();
+
   return new Response(JSON.stringify({
     hello: true,
-    probeVersion: "v8-probe",
+    probeVersion: "v8.2-probe",
     server: {
       node: (typeof process !== "undefined" && process.version) ? process.version : "unknown",
       hasKey: !!key,
@@ -31,18 +56,13 @@ export default async function handler(event) {
     },
     received: {
       method: event.httpMethod,
-      headers: event.headers ? {
-        "content-type": event.headers["content-type"] || event.headers["Content-Type"] || null,
-        "user-agent": event.headers["user-agent"] || event.headers["User-Agent"] || null,
-        "x-forwarded-for": event.headers["x-forwarded-for"] || null,
-      } : null,
-      bodyIsString: typeof event.body === "string",
-      bodyPreview: bodyText.slice(0, 300),
-      bodyLength: bodyText.length,
-      parseFailed,
-      parsedKind: parsed ? parsed.kind : null,
+      eventTopLevelKeys: eventKeys,
+      allHeaders: hdrs,
+      headerKeys: Object.keys(hdrs),
+      body: bodyInfo,
+      rawInfo,
     },
-    hint: "这是探针回显。若 bodyPreview 是 [object ...]，说明前端/网关把对象字符串化当成 body 发出；请把本 JSON 原样贴给助手。",
+    hint: "v8.2 终极探针。把这整段 JSON 原样贴给助手。重点看 eventTopLevelKeys / allHeaders / body。",
   }), { status: 200, headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" } });
 }
 

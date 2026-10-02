@@ -1,41 +1,55 @@
 // ============================================================
-//  submit3d.mjs —— Tripo 图转3D 提交（返回 Response）
-//  POST /.netlify/functions/submit3d   body: { prompt, imageUrl?, storageKey? }
-//  返回: { taskId, storageKey }
+//  submit3d.mjs —— 临时【终极探针版 v8.2-submit-probe】
+//  ⚠️ 与 proxy v8.2 一致：把 event 所有字段 + 全部请求头 + body 真实内容 全量回显。
+//  排查完成后替换回正式提交逻辑。
 // ============================================================
-const TRIPO_URL =
-  "https://maas.qianwenaiapi.com/api/v1/services/aigc/video-generation/3d-generation";
 
 export default async function handler(event) {
-  if (event.httpMethod === "OPTIONS") return new Response("ok", { status: 200, headers: cors() });
-  const key = process.env.DASHSCOPE_API_KEY;
-  if (!key) return json(500, { error: "缺少 DASHSCOPE_API_KEY" });
-  try {
-    const input = event.body ? JSON.parse(event.body) : {};
-    const prompt = input.prompt || "文生3D文物纹样";
-    const storageKey = input.storageKey || ("m_" + Date.now().toString(16));
-    const imageUrl = input.imageUrl || null;
-    // Tripo 最简 body：带图转3D用 image_url，纯文生用 prompt
-    const body = { model: "Tripo/Tripo-H3.1", input: {} };
-    if (imageUrl) { body.input.image_url = imageUrl; body.input.prompt = prompt; }
-    else { body.input.prompt = prompt; }
-    const resp = await fetch(TRIPO_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${key}`,
-        "X-DashScope-Async": "enable",
-      },
-      body: JSON.stringify(body),
-    });
-    const text = await resp.text();
-    let j; try { j = JSON.parse(text); } catch (e) { j = { raw: text }; }
-    const taskId = j.output && j.output.task_id;
-    if (!taskId) return json(400, { error: "Tripo 提交失败", detail: j });
-    return json(200, { taskId, storageKey });
-  } catch (e) {
-    return json(500, { error: String(e) });
+  if (event.httpMethod === "OPTIONS") {
+    return new Response("ok", { status: 200, headers: cors() });
   }
+  const key = process.env.DASHSCOPE_API_KEY;
+  const hdrs = event.headers || {};
+  const eventKeys = Object.keys(event || {});
+
+  function describeBody(b) {
+    if (b === null || b === undefined) return { found: false, note: "event.body 是 null/undefined" };
+    if (typeof b === "string") return { found: true, type: "string", length: b.length, preview: b.slice(0, 600) };
+    if (Buffer.isBuffer && Buffer.isBuffer(b)) {
+      const s = b.toString("utf8");
+      return { found: true, type: "Buffer", length: s.length, preview: s.slice(0, 600) };
+    }
+    if (ArrayBuffer.isView && ArrayBuffer.isView(b)) {
+      const s = Buffer.from(b).toString("utf8");
+      return { found: true, type: "TypedArray(" + b.constructor.name + ")", length: s.length, preview: s.slice(0, 600) };
+    }
+    try {
+      const s = JSON.stringify(b);
+      return { found: true, type: "object", length: (s || "").length, preview: (s || "").slice(0, 600) };
+    } catch (e) {
+      return { found: true, type: "object(unserializable)", note: String(e) };
+    }
+  }
+  const bodyInfo = describeBody(event.body);
+
+  return new Response(JSON.stringify({
+    hello: true,
+    submitProbeVersion: "v8.2-submit-probe",
+    server: {
+      node: (typeof process !== "undefined" && process.version) ? process.version : "unknown",
+      hasKey: !!key,
+      keyTail: key ? String(key).slice(-4) : "",
+      hasResponseGlobal: typeof Response !== "undefined",
+    },
+    received: {
+      method: event.httpMethod,
+      eventTopLevelKeys: eventKeys,
+      allHeaders: hdrs,
+      headerKeys: Object.keys(hdrs),
+      body: bodyInfo,
+    },
+    hint: "v8.2 终极探针。把这整段 JSON 原样贴给助手。",
+  }), { status: 200, headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" } });
 }
 
 function cors() {
@@ -44,7 +58,4 @@ function cors() {
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   };
-}
-function json(code, obj) {
-  return new Response(JSON.stringify(obj), { status: code, headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" } });
 }
