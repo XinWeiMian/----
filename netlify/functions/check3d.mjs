@@ -35,6 +35,10 @@ export async function handler(event, context) {
           await store.setJSON(`${storageKey}.meta`, {
             prompt: (input.meta || {}).prompt || "",
             name: (input.meta || {}).name || "",
+            carrier: (input.meta || {}).carrier || "",
+            category: (input.meta || {}).category || "",
+            dynasty: (input.meta || {}).dynasty || "",
+            meaning: (input.meta || {}).meaning || "",
             imageUrl: (input.meta || {}).imageUrl || "",
           });
           saved = true;

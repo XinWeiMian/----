@@ -1,8 +1,8 @@
 // ============================================================
 //  modelStore.mjs —— 3D 模型库（Netlify Blobs）查重/列表/删除（Lambda 返回格式）
-//  POST {op:"get", key}    命中返回 {found, meta}
-//  POST {op:"list"}        列出全部
-//  POST {op:"remove", key} 删除
+//  POST {op:"get", key}         词条命中返回 {found, meta, modelUrl, preview}
+//  POST {op:"list"}             列出全部 3D
+//  POST {op:"remove", key}      删除 3D
 //  ✅ 命名导出 + Lambda 返回 {statusCode,headers,body}
 // ============================================================
 import { getStore } from "@netlify/blobs";
@@ -14,24 +14,33 @@ export async function handler(event, context) {
   try {
     const input = event.body ? JSON.parse(event.body) : {};
     const op = input.op || "get";
-    const store = STORE();
     if (op === "get") {
       const key = input.key || "";
+      const store = STORE();
       const meta = await store.getJSON(`${key}.meta`).catch(() => null);
-      return json(200, { found: !!meta, key, meta });
+      if (meta) {
+        return json(200, {
+          found: true, key, meta,
+          modelUrl: `/.netlify/functions/getmodel?key=${encodeURIComponent(key)}`,
+          preview: meta.imageUrl || "",
+        });
+      }
+      return json(200, { found: false, key });
     }
     if (op === "list") {
       const items = [];
+      const store = STORE();
       for await (const entry of store.list()) {
         if (!entry.key.endsWith(".meta")) continue;
         const m = await store.getJSON(entry.key).catch(() => null);
         const base = entry.key.replace(/\.meta$/, "");
-        items.push({ key: base, meta: m, modelUrl: `/.netlify/functions/getmodel?key=${encodeURIComponent(base)}` });
+        items.push({ key: base, meta: m, preview: (m&&m.imageUrl)||"", modelUrl: `/.netlify/functions/getmodel?key=${encodeURIComponent(base)}` });
       }
       return json(200, { items });
     }
     if (op === "remove") {
       const key = input.key || "";
+      const store = STORE();
       await store.delete(`${key}.glb`).catch(() => {});
       await store.delete(`${key}.meta`).catch(() => {});
       return json(200, { removed: key });

@@ -139,10 +139,11 @@
     <div id="qaArea"></div>
   </section>
 
-  <!-- 模型库（自动复用） -->
+  <!-- 类似 3D 模型：生成 2D 图时展示库中同词条 3D 图样 -->
   <section class="panel" id="plib" style="display:none">
-    <h2>🧊 已生成 3D 模型库 <span class="badge">词条相同自动复用</span></h2>
-    <div class="model-list" id="modelList"></div>
+    <h2>🧊 类似 3D 模型 <span class="badge">生成2D时展示同词条模型</span></h2>
+    <div id="similar3dArea"></div>
+    <div class="model-list" id="modelList" style="margin-top:12px"></div>
   </section>
 
   <div class="foot">数据来源：Wényàng 中华传统纹样 · AI 生成 2D/3D 用于校赛演示</div>
@@ -203,54 +204,164 @@ function step1(){
   showProgress('①配方已生成，②③④同步执行中…');
 }
 
-function buildRecipe(t){
-  const has = (arr)=>arr.some(w=>t.includes(w));
-  const tables = [
-    { cat:['动物瑞兽纹'], name:'龙纹',      kw:['龙','蛟','虬'],             meaning:'皇权/腾达', ele:['龙','祥云'], note:'强调龙为主体' },
-    { cat:['动物瑞兽纹'], name:'凤纹',      kw:['凤','凤凰','鸾'],           meaning:'祥和/重生', ele:['凤','牡丹'], note:'以凤鸟为主体' },
-    { cat:['动物瑞兽纹'], name:'麒麟纹',    kw:['麒麟'],                     meaning:'仁瑞',      ele:['麒麟','祥云'], note:'麒麟为主体' },
-    { cat:['动物瑞兽纹'], name:'鹤纹',      kw:['鹤','仙鹤'],                meaning:'长寿',      ele:['鹤','松'], note:'仙鹤为主体' },
-    { cat:['动物瑞兽纹'], name:'鹿纹',      kw:['鹿'],                       meaning:'禄',        ele:['鹿'], note:'鹿为主体' },
-    { cat:['动物瑞兽纹'], name:'虎纹',      kw:['虎','老虎','猛虎'],         meaning:'勇猛/守护', ele:['虎','山石'], note:'猛虎为主体，突出雄壮' },
-    { cat:['动物瑞兽纹'], name:'狮纹',      kw:['狮','狮子','狻猊'],         meaning:'威武',      ele:['狮','绣球'], note:'狮为主体' },
-    { cat:['动物瑞兽纹'], name:'鱼纹',      kw:['鱼','锦鲤','鲤鱼'],         meaning:'富余',      ele:['鱼','水波'], note:'鱼为主体' },
-    { cat:['动物瑞兽纹'], name:'饕餮纹',    kw:['饕餮'],                     meaning:'神秘威严',  ele:['饕餮','回纹'], note:'饕餮为主体' },
-    { cat:['植物花卉纹'], name:'缠枝莲纹',  kw:['莲','荷花','莲花'],         meaning:'清廉/圣洁', ele:['莲','茎蔓'], note:'莲花为主体' },
-    { cat:['植物花卉纹'], name:'牡丹纹',    kw:['牡丹'],                     meaning:'富贵',      ele:['牡丹'], note:'牡丹为主体' },
-    { cat:['植物花卉纹'], name:'卷草纹',    kw:['卷草','忍冬'],              meaning:'生机',      ele:['卷草'], note:'卷草为主体' },
-    { cat:['云水山石纹'], name:'云纹',      kw:['云','祥云'],                meaning:'吉庆/高升', ele:['云气'], note:'云为主体' },
-    { cat:['云水山石纹'], name:'山水纹',    kw:['山','川','水','山水','江'], meaning:'磅礴',      ele:['山','水','云'], note:'体现磅礴宏大的山水意境' },
-    { cat:['几何锦纹'],   name:'回纹',      kw:['回纹'],                     meaning:'连绵',      ele:['回形'], note:'回纹为地纹' },
-    { cat:['吉祥器物纹'], name:'如意纹',    kw:['如意'],                     meaning:'顺遂',      ele:['如意'], note:'如意为主体' },
-    { cat:['文字纹样'],   name:'寿字纹',    kw:['寿'],                       meaning:'长寿',      ele:['寿字'], note:'寿字为主体' },
-  ];
-  for(const tb of tables){
-    if(has(tb.kw)){
-      const pool = PATTERNS.filter(p=>tb.cat.includes(p.category) && /^w\d+$/.test(p.id));
-      if(pool.length){
-        const r = pool[Math.floor(Math.random()*pool.length)];
-        return { name:r.name, cat:tb.cat, elements:tb.ele, meaning:r.meaning||tb.meaning, carrier:pickCarrier(t), dynasty:pickDynasty(t), abstractNote:tb.note };
-      }
-      return { name:tb.name, cat:tb.cat, elements:tb.ele, meaning:tb.meaning, carrier:pickCarrier(t), dynasty:pickDynasty(t), abstractNote:tb.note };
+/* ================= 智能语义匹配 smartMatch =================
+ * 从 500 条真实纹样库中，按用户输入的抽象词/具体元素词/载体作语义匹配，
+ * 返回按得分排序的真实纹样列表（不再随机 fallback）。
+ */
+const CATEGORY_KEYWORDS = [
+  { cat:'动物瑞兽纹', kw:['动物','瑞兽','兽','龙','凤','麒麟','虎','狮','鹤','鹿','鱼','饕餮','蝙蝠','龟','象','马','羊','猴','蛙','昆虫','蝶'] },
+  { cat:'植物花卉纹', kw:['植物','花卉','花','草木','莲','牡丹','梅','兰','竹','菊','卷草','忍冬','藤','瓜','果','缠枝','宝相','葵','桃'] },
+  { cat:'几何锦纹',   kw:['几何','回纹','锦','方格','菱','三角','圆点','条纹','万字','卍','连续','边框'] },
+  { cat:'云水山石纹', kw:['云水','山水','云','水','山','石','江','海','涛','纹','气','自然'] },
+  { cat:'吉祥器物纹', kw:['吉祥','器物','如意','八宝','铜钱','元宝','瓶','花篮','宝剑','葫芦','佛','八吉祥','杂宝'] },
+  { cat:'文字纹样',   kw:['文字','字','寿','福','禄','喜','吉','回文','文章','铭'] },
+];
+// 载体兼容过滤：服饰/织物类需求优先织物类载体纹样
+const CARRIER_COMPAT = {
+  '服饰':   ['织','锦','绣','帛','绸','缎','罗','刺绣','纱'],
+  '青铜鼎': ['青铜','铜','鼎'],
+  '瓷':     ['瓷'],
+  '织锦':   ['织','锦','绣','帛','绸','缎','罗','刺绣','纱'],
+  '玉':     ['玉'],
+  '漆':     ['漆'],
+  '金':     ['金','银','鎏'],
+  '木':     ['木'],
+  '陶':     ['陶','瓦','砖'],
+};
+
+function smartMatch(t){
+  if(!PATTERNS.length) return [];
+  const norm = t.toLowerCase();
+  const scored = PATTERNS.filter(p=>/^w\d+$/.test(p.id)).map(p=>{
+    let score = 0;
+    const name = String(p.name||'');
+    const elems = (Array.isArray(p.elements)?p.elements:[]).map(String);
+    const meaning = String(p.meaning||'');
+    const carrier = String(p.carrier||'');
+    const cat = String(p.category||'');
+    // 1) 纹样名直接命中
+    if(t.includes(name)) score += 60;
+    // 2) 具体元素词命中（龙/凤/鹤/牡丹/回纹…）
+    const nameHit = elems.some(e=>t.includes(e)&&e.length>1);
+    if(nameHit) score += 30;
+    // 3) 类别抽象词命中（动物/植物/几何/云水/吉祥/文字）
+    for(const ck of CATEGORY_KEYWORDS){
+      if(cat===ck.cat && ck.kw.some(k=>t.includes(k))){ score += 15; break; }
     }
-  }
-  const all = [
-    { cat:['动物瑞兽纹'], name:'瑞兽纹', ele:['瑞兽'], meaning:'祥瑞', note:'从动物瑞兽纹中联想具体瑞兽（龙/凤/麒麟/虎等）自然采用其一' },
-    { cat:['植物花卉纹'], name:'花卉纹', ele:['花卉'], meaning:'生机', note:'从植物花卉纹中联想具体花卉（莲/牡丹/梅等）' },
-    { cat:['云水山石纹'], name:'山水云纹', ele:['云','山','水'], meaning:'磅礴', note:'体现磅礴宏大的山水意境，作为画面重点' },
-  ];
-  const pick = all[Math.floor(Math.random()*all.length)];
-  const pool = PATTERNS.filter(p=>pick.cat.includes(p.category) && /^w\d+$/.test(p.id));
-  if(pool.length){
-    const r = pool[Math.floor(Math.random()*pool.length)];
-    return { name:r.name, cat:pick.cat, elements:pick.ele, meaning:r.meaning||pick.meaning, carrier:pickCarrier(t), dynasty:pickDynasty(t), abstractNote:pick.note };
-  }
-  return { name:pick.name, cat:pick.cat, elements:pick.ele, meaning:pick.meaning, carrier:pickCarrier(t), dynasty:pickDynasty(t), abstractNote:pick.note };
+    // 4) 载体兼容（服饰类需求→织物载体纹样加权）
+    const det = detectCarrier(t);
+    if(det){
+      const keys = Object.keys(CARRIER_COMPAT).find(k=>det.includes(k));
+      const has = keys && CARRIER_COMPAT[keys].some(w=>carrier.includes(w));
+      if(has) score += 20;
+    }
+    // 5) 寓意命中（吉祥/富/寿…）
+    if(t.includes('吉祥') && meaning.includes('吉')) score += 8;
+    return { p, score, name, cat };
+  }).filter(x=>x.score>0).sort((a,b)=>b.score-a.score);
+  return scored.map(x=>x.p);
 }
 
-const CARRIERS = ['青铜器','瓷器','织锦','木雕','玉器','漆器','陶器','金银器'];
+function buildRecipe(t){
+  const matched = smartMatch(t);   // 语义匹配出的真实纹样列表（按分排序）
+  const det = detectCarrier(t);    // 用户指定的载体（若指定）
+
+  // 载体优先绑定用户输入，未指定再退回纹样自身载体
+  let recipeCarrier;
+  if(det) recipeCarrier = det;
+  else if(matched[0]) recipeCarrier = pickCarrier(t, { name: matched[0].name });
+
+  // 首选：语义匹配命中较真实的纹样（得分>=20 视为可靠命中）
+  let pick = null;
+  if(matched.length){
+    const top = matched[0];
+    if(top) pick = { name:top.name, cat:[top.category], elements:Array.isArray(top.elements)?top.elements:[], meaning:top.meaning||'', carrier: pickCarrier(t, { name: top.name }), dynasty:pickDynasty(t), realPattern: top.id };
+  }
+  // 兜底：未命中任何真实纹样时才走词典表（保留常见纹样的稳定命名）
+  if(!pick){
+    const has = (arr)=>arr.some(w=>t.includes(w));
+    const tables = [
+      { cat:['动物瑞兽纹'], name:'龙纹',      kw:['龙','蛟','虬'],             meaning:'皇权/腾达', ele:['龙','祥云'], note:'以龙为主体' },
+      { cat:['动物瑞兽纹'], name:'凤纹',      kw:['凤','凤凰','鸾'],           meaning:'祥和/重生', ele:['凤','牡丹'], note:'以凤鸟为主体' },
+      { cat:['动物瑞兽纹'], name:'麒麟纹',    kw:['麒麟'],                     meaning:'仁瑞',      ele:['麒麟','祥云'], note:'麒麟为主体' },
+      { cat:['动物瑞兽纹'], name:'鹤纹',      kw:['鹤','仙鹤'],                meaning:'长寿',      ele:['鹤','松'], note:'仙鹤为主体' },
+      { cat:['动物瑞兽纹'], name:'鹿纹',      kw:['鹿'],                       meaning:'禄',        ele:['鹿'], note:'鹿为主体' },
+      { cat:['动物瑞兽纹'], name:'虎纹',      kw:['虎','老虎','猛虎'],         meaning:'勇猛/守护', ele:['虎','山石'], note:'猛虎为主体，突出雄壮' },
+      { cat:['动物瑞兽纹'], name:'狮纹',      kw:['狮','狮子','狻猊'],         meaning:'威武',      ele:['狮','绣球'], note:'狮为主体' },
+      { cat:['动物瑞兽纹'], name:'鱼纹',      kw:['鱼','锦鲤','鲤鱼'],         meaning:'富余',      ele:['鱼','水波'], note:'鱼为主体' },
+      { cat:['动物瑞兽纹'], name:'饕餮纹',    kw:['饕餮'],                     meaning:'神秘威严',  ele:['饕餮','回纹'], note:'饕餮为主体' },
+      { cat:['植物花卉纹'], name:'缠枝莲纹',  kw:['莲','荷花','莲花'],         meaning:'清廉/圣洁', ele:['莲','茎蔓'], note:'莲花为主体' },
+      { cat:['植物花卉纹'], name:'牡丹纹',    kw:['牡丹'],                     meaning:'富贵',      ele:['牡丹'], note:'牡丹为主体' },
+      { cat:['植物花卉纹'], name:'卷草纹',    kw:['卷草','忍冬'],              meaning:'生机',      ele:['卷草'], note:'卷草为主体' },
+      { cat:['云水山石纹'], name:'云纹',      kw:['云','祥云'],                meaning:'吉庆/高升', ele:['云气'], note:'云为主体' },
+      { cat:['云水山石纹'], name:'山水纹',    kw:['山','川','水','山水','江'], meaning:'磅礴',      ele:['山','水','云'], note:'体现磅礴宏大的山水意境' },
+      { cat:['几何锦纹'],   name:'回纹',      kw:['回纹'],                     meaning:'连绵',      ele:['回形'], note:'回纹为地纹' },
+      { cat:['吉祥器物纹'], name:'如意纹',    kw:['如意'],                     meaning:'顺遂',      ele:['如意'], note:'如意为主体' },
+      { cat:['文字纹样'],   name:'寿字纹',    kw:['寿'],                       meaning:'长寿',      ele:['寿字'], note:'寿字为主体' },
+    ];
+    for(const tb of tables){
+      if(has(tb.kw)){
+        const pool = PATTERNS.filter(p=>tb.cat.includes(p.category) && /^w\d+$/.test(p.id));
+        if(pool.length){
+          const r = pool[Math.floor(Math.random()*pool.length)];
+          pick = { name:r.name, cat:tb.cat, elements:tb.ele, meaning:r.meaning||tb.meaning, carrier:pickCarrier(t,{name:r.name}), dynasty:pickDynasty(t), abstractNote:tb.note, realPattern:r.id };
+        } else {
+          pick = { name:tb.name, cat:tb.cat, elements:tb.ele, meaning:tb.meaning, carrier:pickCarrier(t,{name:tb.name}), dynasty:pickDynasty(t), abstractNote:tb.note };
+        }
+        break;
+      }
+    }
+  }
+  // 最终兜底：取库中第一类真实纹样
+  if(!pick){
+    const any = PATTERNS.filter(p=>/^w\d+$/.test(p.id));
+    const r = any[Math.floor(Math.random()*Math.min(any.length,20))];
+    pick = { name:r.name, cat:[r.category], elements:Array.isArray(r.elements)?r.elements.slice(0,4):[], meaning:r.meaning||'', carrier:pickCarrier(t,{name:r.name}), dynasty:pickDynasty(t), realPattern:r.id };
+  }
+
+  // 供 2D/3D 复用的稳定 key（同一需求原文 → 同一 key）
+  const stableKey = hashKey('recipe:'+String(t||'').trim());
+  pick.stableKey = stableKey;
+  // 附带语义匹配出的候选真实纹样清单（供 AI 精化参考 & 溯源卡片）
+  pick.matchedPatterns = (matched.slice(0,6)||[]).map(p=>({ id:p.id, name:p.name, category:p.category, carrier:p.carrier }));
+  pick.carrier = recipeCarrier || pick.carrier || '青铜器';
+  return pick;
+}
+
+/* 载体识别：覆盖常见文物载体，含服饰/鼎/方尊等，避免随机落回瓷器/玉璧 */
+const CARRIER_RULES = [
+  { carrier:'服饰',        kw:['服饰','衣服','衣裳','袍','裙','衫','衣','服饰','冠','带','披帛'] },
+  { carrier:'青铜鼎',      kw:['鼎','方尊','尊','青铜器','簋','彝','爵','觚','盉'] },
+  { carrier:'瓷器',        kw:['瓷','瓶','罐','碗','盘','杯','壶','盏','盂','尊(非青铜)'] },
+  { carrier:'织锦',        kw:['织锦','锦','绣','缂丝','缎','帛','罗','绸'] },
+  { carrier:'玉器',        kw:['玉','玉佩','玉璧','珩','环','玦'] },
+  { carrier:'漆器',        kw:['漆','剔红','雕漆','漆盒'] },
+  { carrier:'金银器',      kw:['金','银','鎏金','金簪','金器','银器'] },
+  { carrier:'木雕',        kw:['木雕','木','家具','屏风','挂屏','匾'] },
+  { carrier:'陶器',        kw:['陶','瓦','俑','砖','瓦当'] },
+];
+function detectCarrier(t){
+  // 一旦用户明确指定载体，绝不随机回退到瓷器/玉璧
+  const hit = CARRIER_RULES.find(r=>r.kw.some(w=>t.includes(w)));
+  return hit ? hit.carrier : null; // null 表示未指定，由调用方决定
+}
+function pickCarrier(t, code){
+  const hit = detectCarrier(t);
+  if(hit) return hit;
+  // 未指定载体：优先从当前配方纹样自身的载体属性中选
+  if(code && code.recipeCarrier) return code.recipeCarrier;
+  if(code && code.name){
+    const p = PATTERNS.find(x=>x.name===code.name);
+    if(p && p.carrier){
+      // 取第一个载体 token（去掉括号注释，得到干净的载体词）
+      const first = String(p.carrier).split(/[、,，\s]/).filter(Boolean)[0];
+      const clean = first ? first.replace(/[（(].*?[）)]/g,'').trim() : '';
+      if(clean) return clean;
+    }
+  }
+  return '青铜器'; // 视觉冲击力强，作为兜底而非随机
+}
 const DYNASTIES = ['商周','春秋战国','汉代','魏晋','隋唐','宋','元','明清'];
-function pickCarrier(t){ const m = CARRIERS.find(c=>t.includes(c)); return m||CARRIERS[Math.floor(Math.random()*CARRIERS.length)]; }
 function pickDynasty(t){ const d = DYNASTIES.find(x=>t.includes(x)); return d||DYNASTIES[Math.floor(Math.random()*DYNASTIES.length)]; }
 
 /* ========== ③ AI 提示词精化 ========== */
@@ -259,9 +370,13 @@ async function step2(){
   $('refineStatus').innerHTML='<span class="spin"></span> AI 正在精化提示词…';
   $('p3').scrollIntoView({behavior:'smooth'});
   const code=S.recipe, userReq=$('req').value.trim();
-  const sys='你是文物AI生成提示词专家。根据用户中文需求与配方写一段高质量中文文生图提示词（供2D与3D生成）。要求：突出载体器型材质、表面纹样名称及寓意、写实质感、均匀灯光、博物馆展品照片感、构图完整。具备抽象理解力：若需求宽泛（如"动物纹样""山水纹样"），从该类各种具体纹样（龙凤鹤鹿鱼、草木云山等）中联想并自然采用适当的一种或几种，不硬性平铺所有母题。只输出提示词本身。';
+  // 载体强制绑定：把用户指定载体 + 语义匹配的真实纹样清单注入提示词
+  const matchedList = (code.matchedPatterns||[]).map(m=>m.name+'(载体:'+(m.carrier||'')+')').join('、');
+  const carrierHint = code.carrier ? '。载体必须是「'+code.carrier+'」，严禁擅自改为瓷器或玉璧等用户未指定的类型' : '';
+  const sys='你是文物AI生成提示词专家。根据用户中文需求与配方写一段高质量中文文生图提示词（供2D与3D生成）。要求：突出载体器型材质、表面纹样名称及寓意、写实质感、均匀灯光、博物馆展品照片感、构图完整'+carrierHint+'。若配方提供了「候选真实纹样清单」，请从中挑选与需求最贴合的具体纹样并点名使用（可参考其载体），不要凭空编造库外纹样；具备抽象理解力：若需求宽泛（如"动物纹样""山水纹样"），从清单对应类别的具体纹样中自然采用适当的一种或几种，不硬性平铺所有母题。只输出提示词本身。';
+  const contentBody='配方：'+JSON.stringify(code)+'\n候选真实纹样清单：'+(matchedList||'（无）')+'\n用户需求：'+userReq;
   try{
-    const body1=[{role:'system',content:sys},{role:'user',content:'配方：'+JSON.stringify(code)+'\n用户需求：'+userReq}];
+    const body1=[{role:'system',content:sys},{role:'user',content:contentBody}];
   const r=await fetch(CFG.qwen.proxy,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'qwen',model:CFG.qwen.model,messages:body1})});
     const j=await r.json();
     const content=(j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content)||(j.output&&j.output.text)||JSON.stringify(j);
@@ -321,6 +436,11 @@ function step3toCardsThenImg(){
 async function gen2d(){
   $('imgStatus').innerHTML='<span class="spin"></span> 通义万相正在生成写实文物图…';
   const prompt = S.refined || buildFallbackPrompt(S.recipe);
+  // 与 3D 共用词条 key：用于「生成2D时展示库中同词条的3D图样」
+  const stableKey = (S.recipe&&S.recipe.stableKey) ? S.recipe.stableKey : makeKey(String(prompt||'')||('t_'+Date.now()));
+  S.art2dKey = 'gen2d:'+stableKey;
+  // 展示库中同词条的 3D 图样（类似 3D 模型）
+  showSimilar3d(stableKey);
   try{
     const r=await fetch(CFG.wanx.proxy,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'wanx',prompt:prompt,model:CFG.wanx.model,size:CFG.wanx.size})});
     const j = await r.json();
@@ -328,7 +448,7 @@ async function gen2d(){
       S.imageUrl = j.url;
       $('imgWrap').style.display='block';
       $('imgWrap').innerHTML = '<img src="'+j.url+'" alt="AI 写实文物图">';
-      $('imgStatus').innerHTML = '';
+      $('imgStatus').innerHTML = '✅ 2D 图生成成功';
       $('imgNext').style.display='flex';
     } else if(j && j.pending){
       $('imgStatus').innerHTML = '⏳ 仍在生成中（万相排队）… 请稍后再试一次';
@@ -338,6 +458,36 @@ async function gen2d(){
   }catch(e){
     $('imgStatus').innerHTML = '⚠️ 2D 生成调用失败：' + e.message;
   }
+}
+
+/* 生成 2D 时，展示库中同词条（同 stableKey）已生成的 3D 图样 */
+async function showSimilar3d(stableKey){
+  const plib = $('plib'), area = $('similar3dArea');
+  if(!area) return;
+  try{
+    const r = await fetch(modelStoreURL(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'get',key:stableKey})});
+    const j = await r.json().catch(()=>({}));
+    if(j && j.found && j.modelUrl && j.meta){
+      if(plib) plib.style.display='block';
+      const m = j.meta || {};
+      const name = m.name || (S.recipe && S.recipe.name) || stableKey;
+      const info = [m.carrier, m.category, m.dynasty].filter(Boolean).join(' · ');
+      area.innerHTML =
+        '<div class="note" style="padding:10px;background:rgba(255,220,130,.12);border:1px solid rgba(200,160,80,.3);border-radius:10px;margin-bottom:6px">'+
+        '📌 库中已有相同需求（词条 <b>'+stableKey+'</b>）的 3D 模型：<b>'+name+'</b>'+(info?'（'+info+'）':'')+'。生成 3D 时将直接复用，无需重复调用 AI。'+
+        '</div>'+
+        '<model-viewer src="'+j.modelUrl+'" alt="同词条 3D" camera-controls auto-rotate shadow-intensity="1" style="width:100%;height:360px;border-radius:12px;background:#111"></model-viewer>'+
+        '<div style="display:flex;justify-content:center;gap:8px;margin-top:8px;flex-wrap:wrap">'+
+          '<button class="ghost" onclick="gen3d(true)">🔄 强制重新生成 3D</button>'+
+          '<button class="ghost" onclick="loadModelList()">📚 查看全部模型库</button>'+
+        '</div>';
+      if(plib) plib.scrollIntoView({behavior:'smooth',block:'nearest'});
+    } else {
+      // 库中无同词条 3D：显示提示并保留（面板隐藏由用户生成3D后再现）
+      area.innerHTML = '';
+      if(plib) plib.style.display='none';
+    }
+  }catch(e){ /* 不影响 2D 生成 */ }
 }
 /* ========== ⑥ 3D 写实模型（图转3D + 模型库复用） ========== */
 function step5to3d(){ $('p6').style.display='block'; $('p6').scrollIntoView({behavior:'smooth'}); gen3dOnEntry(); }
@@ -398,9 +548,13 @@ async function loadModelList(){
     const r=await fetch(modelStoreURL(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'list'})});
     const j=await r.json();
     const items=j.items||[];
-    plib.style.display='block';
     if(!items.length){ $('modelList').innerHTML='<div style="color:#999">模型库为空（生成3D后自动入库并复用）</div>'; return; }
-    $('modelList').innerHTML='<div class="model-list">'+items.map(it=>'<div class="mli"><img src="'+(it.preview||'')+'" onerror="this.style.background=\'#ddd\'"><div class="info"><b>'+it.key+'</b>'+(it.prompt?'<br>'+String(it.prompt).slice(0,40):'')+'<small>'+(it.createdAt||'')+'</small></div></div>').join('')+'</div>';
+    $('modelList').innerHTML='<div class="model-list">'+items.map(it=>{
+      const m=it.meta||{};
+      const tag=(m.name?m.name:'')+(m.carrier?(' · '+m.carrier):'');
+      return '<div class="mli"><img src="'+(it.preview||'')+'" onerror="this.style.background=\'#ddd\'"><div class="info"><b>'+tag+'</b>'+(it.key?'<small>词条：'+it.key+'</small>':'')+(m.createdAt?'<small>'+m.createdAt+'</small>':'')+'</div></div>';
+    }).join('')+'</div>';
+    plib.style.display='block';
   }catch(e){ plib.style.display='none'; }
 }
 
@@ -499,7 +653,7 @@ async function gen3d(force){
       await new Promise(r=>setTimeout(r,5000));
       const ck = await fetch(CFG.tripo.check, {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ taskId: sub.taskId, storageKey: key, meta:{ name:S.recipe&&S.recipe.name, prompt } })
+        body: JSON.stringify({ taskId: sub.taskId, storageKey: key, meta:{ name:S.recipe&&S.recipe.name, prompt, carrier:S.recipe&&S.recipe.carrier, category:(S.recipe&&S.recipe.cat&&S.recipe.cat.join('/'))||'', dynasty:S.recipe&&S.recipe.dynasty, meaning:S.recipe&&S.recipe.meaning } })
       }).then(r=>r.json().catch(()=>({status:'FETCH_ERR'})));
       if(ck.status === 'SUCCEEDED'){
         showModel3d(ck.modelUrl, ck.meta);
