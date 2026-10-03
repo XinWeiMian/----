@@ -16,3 +16,6 @@
 
 [[functions."check3d".config]]
   timeout = 15
+
+[[functions."keyprobe".config]]
+  timeout = 30
