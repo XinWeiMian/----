@@ -61,7 +61,6 @@ AIC 校赛·智能文化赛道作品。7 步工作台：输入需求 → AI 文�
 
 > ⚠️ 重新部署时必须**完整替换** `netlify/functions/*.mjs` 全部 5 个文件，
 > 到 Netlify → Deploys → **Trigger deploy（Clear cache and deploy site / Deploy project without cache）强制重新部署**。
-> 本轮排查看过探针版（v8.x-probe），**部署前请确认线上函数不再是探针版**（应为正式版，无 `probeVersion` 字段）。
 
 ## 目录结构
 
