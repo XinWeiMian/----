@@ -1,37 +1,50 @@
 // ============================================================
-//  getmodel.mjs —— 从 Netlify Blobs 流式返回 GLB 二进制（返回 Response）
-//  GET /.netlify/functions/getmodel?key=<storageKey>
-//  model-viewer 直接引用此 URL。<model-viewer> 内部会 fetch 该 URL。
-//  ⚠️ 前端需用相对路径或同源完整地址调用；返回标准 Response。
+//  getmodel.mjs —— 从 Netlify Blobs 取回 GLB 模型（GET，返回二进制）
+//  GET /.netlify/functions/getmodel?key=xxx
+//  ✅ 命名导出 + Lambda 返回格式（二进制用 Base64 + isBase64Encoded）
 // ============================================================
 import { getStore } from "@netlify/blobs";
 
-export default async function handler(event) {
-  if (event.httpMethod === "OPTIONS") return new Response("ok", { status: 200, headers: cors() });
+export async function handler(event, context) {
+  if (event.httpMethod === "OPTIONS") return ok("ok");
   try {
-    const url = new URL(event.rawUrl || `https://x/${event.path}`);
-    const key = url.searchParams.get("key") || "";
-    if (!key) return json(400, { error: "missing key" });
+    const q = event.queryStringParameters || {};
+    const key = Array.isArray(q.key) ? q.key[0] : (q.key || "");
+    if (!key) return json(400, { error: "缺少 key" });
     const store = getStore("tripo3d");
-    const blob = await store.get(`${key}.glb`).catch(() => null);
-    if (!blob) return json(404, { error: "not found" });
-    const buf = Buffer.from(await blob.arrayBuffer());
-    return new Response(new Uint8Array(buf), {
-      status: 200,
+    const buf = await store.get(`${key}.glb`);
+    if (!buf) return json(404, { error: "模型不存在" });
+    const arrayBuf = await buf.arrayBuffer();
+    const base64 = Buffer.from(arrayBuf).toString("base64");
+    return {
+      statusCode: 200,
       headers: {
-        "Content-Type": "model/gltf-binary",
         "Access-Control-Allow-Origin": "*",
-        "Cache-Control": "public, max-age=86400",
+        "Content-Type": "model/gltf-binary",
+        "Content-Disposition": `inline; filename="${encodeURIComponent(key)}.glb"`,
       },
-    });
+      isBase64Encoded: true,
+      body: base64,
+    };
   } catch (e) {
     return json(500, { error: String(e) });
   }
 }
 
 function cors() {
-  return { "Access-Control-Allow-Origin": "*" };
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  };
 }
 function json(code, obj) {
-  return new Response(JSON.stringify(obj), { status: code, headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" } });
+  return {
+    statusCode: code,
+    headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify(obj),
+  };
+}
+function ok(body) {
+  return { statusCode: 200, headers: { ...cors(), "Content-Type": "text/plain; charset=utf-8" }, body };
 }

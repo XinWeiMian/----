@@ -38,28 +38,30 @@ AIC 校赛·智能文化赛道作品。7 步工作台：输入需求 → AI 文�
   `modelStore.mjs` 负责查重 / 列表，`getmodel.mjs` 流式返回 GLB。相同词条再次生成直接复用，不重复消耗 API。
 - 前端 **不暴露任何 Key**，所有调用经由 `/.netlify/functions/*` 代理。
 
-## 本次更新（修复）要点
+## 本次更新（修复）要点 —— 【关键：已定位三处 AI 报错的真正根因】
 
-- **修复「三处调用 AI 都报 `Function returned an unsupported value. Accepted types are 'Response' or 'undefined'`」**：
-  你的 Netlify 站点用的是**新 streaming 运行时（Node 18+）**，它**只接受标准 Web `Response` 对象作为函数返回值**，不接受旧式 `{statusCode, headers, body}` 对象。
-  已确认全部 5 个函数（proxy / submit3d / check3d / modelStore / getmodel）**都返回标准 `new Response(...)`**，完全满足该运行时要求，不再报此错。
-- 修复前端千问调用字段不一致：原 `payload:` → 统一为 `messages:`，与 `proxy.mjs` 对齐（这是 ③千问精化 / ⑦问答 之前报错的根因之一）。
-- 修复模型库列表接口 `list` 过滤条件（`prefix` 匹配不到实际 key），改为遍历后按 `endsWith(".meta")` 过滤。
-- 全量 `node --check` 校验通过：`config.js`、`proxy/submit3d/check3d/modelStore/getmodel`、前端内联 JS。
+之前三处 AI（③千问 / ⑤万相 / ⑥Tripo）全部报错、前端能看到函数但拿不到数据，
+最终定位到**函数 handler 签名与返回格式不匹配当前运行时**：
 
-> ⚠️ 重新部署时必须**完整替换旧的函数文件**（尤其 `netlify/functions/*.mjs`），并到 Netlify → Deploys → **Trigger deploy（Clear cache and deploy site）强制重新部署**，确认 Deploys 里最新一次成功。若线上仍报错，大概率是旧函数未被替换。
+- 你的站点函数运行在 **Node v24（esbuild bundler）** 的运行时下。
+- 这个运行时**要求**：
+  - handler 用 **命名导出** `export async function handler(event, context)`（不是 `export default`）；
+  - 返回 **Lambda 格式对象** `{ statusCode, headers, body }`（body 为**字符串**），
+    **不是**标准 Web `Response`（用 `new Response(...)` 会报
+    `502 invalid status code returned from lambda: 0` / event 变成空壳收不到 body）。
+- 已把 **全部 5 个函数**（proxy / submit3d / check3d / modelStore / getmodel）改为上述规范签名：
+  - 千问/万相/3D 提交/轮询/模型库 → 返回 `{statusCode, headers, body:JSON.stringify(...)}`
+  - getmodel（GLB 二进制）→ 返回 `{statusCode, headers, isBase64Encoded:true, body: <base64>}`
+- 前端调用字段与函数**完全对齐**：
+  - 千问 `{ kind:'qwen', model, messages }` → 返回 `{ content }`
+  - 万相 `{ kind:'wanx', prompt, model, size }` → 返回 `{ url }` 或 `{ pending }`
+  - submit3d `{ imageUrl, prompt, storageKey }` → `{ taskId, storageKey }`
+  - check3d `{ taskId, storageKey, meta }` → `{ status, modelUrl }`
+- 全量 `node --check` 校验通过。
 
-## 当前排查状态（临时探针 v8）
-
-`netlify/functions/proxy.mjs` 当前是**强化探针版 v8-probe**：它**绝不崩溃**，
-无论前端发来什么请求体，都直接回显：
-- 服务器是否拿到 `DASHSCOPE_API_KEY`（`server.hasKey` / `server.keyTail`）
-- 收到的请求体原文前 300 字符（`received.bodyPreview`）、长度、是否为字符串
-- 请求头（Content-Type / User-Agent）、HTTP 方法
-
-**目的**：线上若仍报 `proxy.mjs:25:32 ... JSON.parse ... [object Response]`，说明**线上跑的仍是旧版函数**（不是本探针版——本版连 parse 都不做，根本不会在第 25 行崩溃）。
-部署后浏览器访问 `/.netlify/functions/proxy` 或在前端点③步骤，应看到返回 `hello:true, probeVersion:"v8-probe"` 的 JSON；
-把该 JSON 原文贴给助手即可一锤定音。排查完成后，再把 proxy.mjs 替换回正式版（千问/万相代理逻辑）。
+> ⚠️ 重新部署时必须**完整替换** `netlify/functions/*.mjs` 全部 5 个文件，
+> 到 Netlify → Deploys → **Trigger deploy（Clear cache and deploy site / Deploy project without cache）强制重新部署**。
+> 本轮排查看过探针版（v8.x-probe），**部署前请确认线上函数不再是探针版**（应为正式版，无 `probeVersion` 字段）。
 
 ## 目录结构
 

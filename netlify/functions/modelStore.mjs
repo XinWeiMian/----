@@ -1,15 +1,16 @@
 // ============================================================
-//  modelStore.mjs —— 3D 模型库（Netlify Blobs）查重/列表/删除（返回 Response）
+//  modelStore.mjs —— 3D 模型库（Netlify Blobs）查重/列表/删除（Lambda 返回格式）
 //  POST {op:"get", key}    命中返回 {found, meta}
 //  POST {op:"list"}        列出全部
 //  POST {op:"remove", key} 删除
+//  ✅ 命名导出 + Lambda 返回 {statusCode,headers,body}
 // ============================================================
 import { getStore } from "@netlify/blobs";
 
 const STORE = () => getStore("tripo3d");
 
-export default async function handler(event) {
-  if (event.httpMethod === "OPTIONS") return new Response("ok", { status: 200, headers: cors() });
+export async function handler(event, context) {
+  if (event.httpMethod === "OPTIONS") return ok("ok");
   try {
     const input = event.body ? JSON.parse(event.body) : {};
     const op = input.op || "get";
@@ -49,5 +50,12 @@ function cors() {
   };
 }
 function json(code, obj) {
-  return new Response(JSON.stringify(obj), { status: code, headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" } });
+  return {
+    statusCode: code,
+    headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify(obj),
+  };
+}
+function ok(body) {
+  return { statusCode: 200, headers: { ...cors(), "Content-Type": "text/plain; charset=utf-8" }, body };
 }

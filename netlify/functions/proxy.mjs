@@ -1,87 +1,92 @@
 // ============================================================
-//  proxy.mjs —— 终极探针 v8.5（命名导出 + LAMBDA 返回格式）
-//  目标：确认当前 Netlify 运行时究竟期望哪种 handler 返回格式。
-//    - v8.3 export default + Web Response → 能回 hello:true 但 event 空壳
-//    - v8.4 命名导出 + Web Response      → 502 "invalid status code from lambda: 0"
-//  本版 v8.5：命名导出 + 返回 {statusCode, headers, body}(Lambda 格式)，
-//  并完整回显 event / context，验证运行时吃不吃 Lambda 格式。
+//  proxy.mjs —— 通义千问 + 通义万相 代理（POST + JSON body）
+//  POST /.netlify/functions/proxy
+//  body: { kind:"qwen", model?, messages? }  或 { kind:"wanx", prompt, model, size }
+//  返回: 千问→{ content }   万相→{ url } 或 { pending }
+//
+//  ✅ 正式版（已定案签名）：
+//   - handler 用【命名导出】 export async function handler(event, context)
+//   - 返回【Lambda 格式】 { statusCode, headers, body(字符串) }
+//   （Netlify Node24+esbuild 运行时只吃这套组合，Web Response 会 502）
 // ============================================================
 
+const DASH_CHAT = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
+const WANX_SUBMIT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis";
+const WANX_TASK = (id) => `https://dashscope.aliyuncs.com/api/v1/tasks/${id}`;
+
+export async function handler(event, context) {
+  if (event.httpMethod === "OPTIONS") return ok("ok");
+  const key = process.env.DASHSCOPE_API_KEY;
+  if (!key) return json(500, { error: "缺少 DASHSCOPE_API_KEY" });
+  try {
+    const body = event.body ? JSON.parse(event.body) : {};
+    const kind = body.kind || "qwen";
+    if (kind === "wanx") {
+      return await runWanx(key, body);
+    }
+    return await runQwen(key, body);
+  } catch (e) {
+    return json(500, { error: String(e) });
+  }
+}
+
+/* ---------- 千问 ---------- */
+async function runQwen(key, body) {
+  const msgs = Array.isArray(body.messages) ? body.messages : [{ role: "user", content: String(body.prompt || "") }];
+  const resp = await fetch(DASH_CHAT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
+    body: JSON.stringify({ model: body.model || "qwen-plus", messages: msgs, stream: false }),
+  });
+  const text = await resp.text();
+  let j; try { j = JSON.parse(text); } catch (e) { return json(502, { error: "qwen bad response", raw: text.slice(0, 200) }); }
+  if (!resp.ok) return json(resp.status || 502, { error: "千问接口错误", detail: j });
+  const content = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || null;
+  return json(200, { content });
+}
+
+/* ---------- 万相（提交+轮询） ---------- */
+async function runWanx(key, body) {
+  const prompt = body.prompt || "";
+  const submit = await fetch(WANX_SUBMIT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}`, "X-DashScope-Async": "enable" },
+    body: JSON.stringify({ model: body.model || "wan2.2-t2i-flash", input: { prompt }, parameters: { size: body.size || "1024*1024", n: 1 } }),
+  });
+  const st = await submit.text();
+  let sj; try { sj = JSON.parse(st); } catch (e) { return json(502, { error: "wanx submit bad", raw: st.slice(0, 200) }); }
+  const taskId = (sj.output && sj.output.task_id) || (sj.output && sj.output.id);
+  if (!taskId) return json(400, { error: "万相提交失败", detail: sj });
+  // 轮询（Netlify 函数内等待，约 8 秒）
+  for (let i = 0; i < 6; i++) {
+    await sleep(1300);
+    const q = await fetch(WANX_TASK(taskId), { headers: { "Authorization": `Bearer ${key}` } });
+    let qj; try { qj = await q.json(); } catch (e) { continue; }
+    const st2 = qj.output && qj.output.task_status;
+    if (st2 === "SUCCEEDED") {
+      const url = (qj.output.results || [])[0] && qj.output.results[0].url;
+      return json(200, { url });
+    }
+    if (st2 === "FAILED") return json(400, { error: "万相生成失败", detail: qj });
+  }
+  return json(202, { pending: true, task_id: taskId, message: "还在生成" });
+}
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 function cors() {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   };
 }
-
-function safeStr(v) {
-  try { return JSON.stringify(v); } catch (e) { return "stringify-error:" + String(e); }
-}
-
-function describeBody(v) {
-  if (typeof v === "string") {
-    let preview = v.slice(0, 600);
-    let parsed = null, parseFailed = false;
-    try { parsed = JSON.parse(v); } catch (e) { parseFailed = true; }
-    return { found: true, kind: "string", length: v.length, preview, parsed, parseFailed };
-  }
-  if (v === undefined || v === null) return { found: false, kind: String(v), value: v };
-  if (Buffer && Buffer.isBuffer(v)) {
-    const s = v.toString("utf8");
-    return { found: true, kind: "Buffer", byteLength: v.length, preview: s.slice(0, 600) };
-  }
-  if (v instanceof Uint8Array) {
-    let s; try { s = new TextDecoder().decode(v); } catch (e) { s = String(v); }
-    return { found: true, kind: "Uint8Array", byteLength: v.length, preview: s.slice(0, 600) };
-  }
-  return { found: true, kind: typeof v, preview: safeStr(v).slice(0, 600) };
-}
-
-export async function handler(event, context) {
-  const key = process.env.DASHSCOPE_API_KEY || "";
-  const bodyInfo = describeBody(event && event.body);
-  const ownKeys = (event && typeof Reflect !== "undefined" && Reflect.ownKeys)
-    ? Reflect.ownKeys(event).map(String) : [];
-  const contextKeys = (context && typeof context === "object") ? Object.keys(context) : [];
-  let eventJson = null, contextJson = null;
-  try { eventJson = JSON.stringify(event); } catch (e) { eventJson = "stringify-error:" + String(e); }
-  try { contextJson = JSON.stringify(context); } catch (e) { contextJson = "stringify-error:" + String(e); }
-
-  const data = {
-    hello: true,
-    probeVersion: "v8.5-probe",
-    server: {
-      node: process.version,
-      hasKey: !!key,
-      keyTail: key ? key.slice(-4) : null,
-      hasResponseGlobal: typeof Response !== "undefined",
-    },
-    received: {
-      httpMethod: event ? event.httpMethod : undefined,
-      eventTopLevelKeys: event ? Object.keys(event) : [],
-      eventOwnKeys: ownKeys,
-      eventJson,
-      contextTopLevelKeys: contextKeys,
-      contextJson,
-      allHeaders: (event && event.headers) || {},
-      headerKeys: event ? Object.keys(event.headers || {}) : [],
-      body: bodyInfo,
-    },
-    format: "v8.5 lambda-object-response",
-    hint: "本版返回 Lambda 格式 {statusCode,headers,body}。若 Netlify 报 unsupported value 则运行时吃 Web Response；若正常则吃 Lambda 格式。请把本 JSON 原样贴给助手。",
-  };
-
-  const body = JSON.stringify(data);
+function json(code, obj) {
   return {
-    statusCode: 200,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    },
-    body,
+    statusCode: code,
+    headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify(obj),
   };
+}
+function ok(body) {
+  return { statusCode: 200, headers: { ...cors(), "Content-Type": "text/plain; charset=utf-8" }, body };
 }

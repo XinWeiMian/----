@@ -1,14 +1,15 @@
 // ============================================================
-//  check3d.mjs —— Tripo 任务轮询 + 成功后存 Netlify Blobs（返回 Response）
-//  POST {taskId, storageKey, meta:{prompt,name,imageUrl,...}}
+//  check3d.mjs —— Tripo 任务轮询 + 成功后存 Netlify Blobs（Lambda 返回格式）
+//  POST {taskId, storageKey, meta:{...}}
 //  返回: {status, modelUrl, meta}   (modelUrl 指向 getmodel 流式端点)
+//  ✅ 命名导出 + Lambda 返回 {statusCode,headers,body}
 // ============================================================
 import { getStore } from "@netlify/blobs";
 
 const TASK_URL = (id) => `https://maas.qianwenaiapi.com/api/v1/tasks/${id}`;
 
-export default async function handler(event) {
-  if (event.httpMethod === "OPTIONS") return new Response("ok", { status: 200, headers: cors() });
+export async function handler(event, context) {
+  if (event.httpMethod === "OPTIONS") return ok("ok");
   const key = process.env.DASHSCOPE_API_KEY;
   if (!key) return json(500, { error: "缺少 DASHSCOPE_API_KEY" });
   try {
@@ -24,7 +25,6 @@ export default async function handler(event) {
       const pbr = results[0] && results[0].pbr_model_url;
       const preview = results[0] && results[0].rendered_image_url;
       const storageKey = input.storageKey;
-      // 存 Netlify Blobs（GLB），供 getmodel 流式返回 + 复用
       let saved = false;
       if (storageKey && pbr) {
         try {
@@ -32,9 +32,13 @@ export default async function handler(event) {
           const buf = Buffer.from(await dl.arrayBuffer());
           const store = getStore("tripo3d");
           await store.set(`${storageKey}.glb`, buf);
-          await store.setJSON(`${storageKey}.meta`, { prompt: (input.meta||{}).prompt||"", name: (input.meta||{}).name||"", imageUrl: (input.meta||{}).imageUrl||"" });
+          await store.setJSON(`${storageKey}.meta`, {
+            prompt: (input.meta || {}).prompt || "",
+            name: (input.meta || {}).name || "",
+            imageUrl: (input.meta || {}).imageUrl || "",
+          });
           saved = true;
-        } catch (e) { /* 存储失败不阻断返回 */ }
+        } catch (e) { /* 存储失败不阻断 */ }
       }
       return json(200, { status, modelUrl: saved ? `/.netlify/functions/getmodel?key=${encodeURIComponent(storageKey)}` : pbr, preview, saved });
     }
@@ -52,5 +56,12 @@ function cors() {
   };
 }
 function json(code, obj) {
-  return new Response(JSON.stringify(obj), { status: code, headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" } });
+  return {
+    statusCode: code,
+    headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify(obj),
+  };
+}
+function ok(body) {
+  return { statusCode: 200, headers: { ...cors(), "Content-Type": "text/plain; charset=utf-8" }, body };
 }
